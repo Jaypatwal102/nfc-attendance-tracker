@@ -1,0 +1,234 @@
+// Prisma Schema for NFC Attendance Tracker
+// Database Provider: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------
+// Enums
+// ------------------------------------------------------
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum EmailType {
+  LOW_ATTENDANCE
+  GENERAL
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+}
+
+// ------------------------------------------------------
+// Core Models
+// ------------------------------------------------------
+
+/// Central authentication and authorization table
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(STUDENT)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  student Student?
+  teacher Teacher?
+
+  @@map("users")
+}
+
+/// Student profile table linked 1-to-1 with User
+model Student {
+  id           String   @id @default(uuid())
+  userId       String   @unique @map("user_id")
+  name         String
+  enrollmentNo String   @unique @map("enrollment_no")
+  nfcId        String?  @unique @map("nfc_id")
+  email        String
+  batchId      String   @map("batch_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch           Batch                   @relation(fields: [batchId], references: [id])
+  studentSubjects StudentSubjectMapping[]
+  attendances     Attendance[]
+  emailLogs       EmailLog[]
+
+  @@map("students")
+}
+
+/// Teacher profile table linked 1-to-1 with User
+model Teacher {
+  id         String   @id @default(uuid())
+  userId     String   @unique @map("user_id")
+  name       String
+  employeeId String   @unique @map("employee_id")
+  email      String
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teacherSubjects    TeacherSubjectMapping[]
+  attendanceSessions AttendanceSession[]
+
+  @@map("teachers")
+}
+
+/// Batch entity representing academic program, admission year, semester and section
+model Batch {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  program       String
+  admissionYear Int      @map("admission_year")
+  semester      Int
+  section       String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  students           Student[]
+  teacherSubjects    TeacherSubjectMapping[]
+  studentSubjects    StudentSubjectMapping[]
+  attendanceSessions AttendanceSession[]
+
+  @@map("batches")
+}
+
+/// Academic course / subject
+model Subject {
+  id          String   @id @default(uuid())
+  courseCode  String   @unique @map("course_code")
+  name        String
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  teacherSubjects    TeacherSubjectMapping[]
+  studentSubjects    StudentSubjectMapping[]
+  attendanceSessions AttendanceSession[]
+  emailLogs          EmailLog[]
+
+  @@map("subjects")
+}
+
+/// Defines which teacher teaches which subject to which batch
+model TeacherSubjectMapping {
+  id        String   @id @default(uuid())
+  teacherId String   @map("teacher_id")
+  subjectId String   @map("subject_id")
+  batchId   String   @map("batch_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  batch   Batch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, subjectId, batchId])
+  @@map("teacher_subject_mapping")
+}
+
+/// Defines subject enrollment for each student in a batch
+model StudentSubjectMapping {
+  id        String   @id @default(uuid())
+  studentId String   @map("student_id")
+  subjectId String   @map("subject_id")
+  batchId   String   @map("batch_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  batch   Batch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, subjectId, batchId])
+  @@map("student_subject_mapping")
+}
+
+/// Represents an active or past class/attendance session conducted by a teacher
+model AttendanceSession {
+  id          String   @id @default(uuid())
+  subjectId   String   @map("subject_id")
+  teacherId   String   @map("teacher_id")
+  batchId     String   @map("batch_id")
+  sessionDate DateTime @map("session_date")
+  startTime   DateTime @map("start_time")
+  endTime     DateTime @map("end_time")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  batch       Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  attendances Attendance[]
+
+  @@map("attendance_sessions")
+}
+
+/// Individual attendance record for a student in a session
+model Attendance {
+  id        String           @id @default(uuid())
+  sessionId String           @map("session_id")
+  studentId String           @map("student_id")
+  status    AttendanceStatus
+  remark    String?
+  markedAt  DateTime         @default(now()) @map("marked_at")
+
+  session AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId])
+  @@map("attendance")
+}
+
+// ------------------------------------------------------
+// Optional / System Settings Models
+// ------------------------------------------------------
+
+/// Configurable attendance threshold settings
+model AttendanceSetting {
+  id                String   @id @default(uuid())
+  minimumPercentage Float    @default(75.0) @map("minimum_percentage")
+  warningPercentage Float    @default(80.0) @map("warning_percentage")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("attendance_settings")
+}
+
+/// Logs of automated or teacher-sent warning emails
+model EmailLog {
+  id                   String      @id @default(uuid())
+  studentId            String      @map("student_id")
+  subjectId            String      @map("subject_id")
+  attendancePercentage Float       @map("attendance_percentage")
+  emailType            EmailType   @default(LOW_ATTENDANCE) @map("email_type")
+  status               EmailStatus @default(SENT)
+  sentAt               DateTime    @default(now()) @map("sent_at")
+  errorMessage         String?     @map("error_message")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@map("email_logs")
+}

@@ -10,6 +10,7 @@ router.use(authenticate, requireRole('TEACHER'));
 router.get('/subjects', teacher.getAssignedSubjects);
 router.get('/batches', teacher.getAssignedBatches);
 router.get('/assignments', teacher.getAssignments);
+router.get('/students', teacher.getEnrolledStudents);
 
 // Sessions
 router.post('/attendance-sessions', teacher.createAttendanceSession);

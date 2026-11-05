@@ -75,23 +75,180 @@ async function getAssignments(req, res, next) {
       },
     });
 
-    const assignments = mappings
-      .filter((m) => m.subject.isActive && m.batch.isActive)
-      .map((m) => ({
-        subject: {
-          id: m.subject.id,
-          course_code: m.subject.courseCode,
-          name: m.subject.name,
-        },
-        batch: {
-          id: m.batch.id,
-          name: m.batch.name,
-          program: m.batch.program,
-          semester: m.batch.semester,
-        },
-      }));
+    const activeMappings = mappings.filter(
+      (m) => m.subject && m.subject.isActive && m.batch && m.batch.isActive
+    );
+
+    const assignments = await Promise.all(
+      activeMappings.map(async (m) => {
+        // Fetch enrolled students for this subject & batch
+        const studentMappings = await prisma.studentSubjectMapping.findMany({
+          where: {
+            subjectId: m.subject.id,
+            batchId: m.batch.id,
+          },
+          include: {
+            student: {
+              include: {
+                user: { select: { isActive: true } },
+              },
+            },
+          },
+          orderBy: {
+            student: { name: 'asc' },
+          },
+        });
+
+        let students = studentMappings
+          .filter((sm) => sm.student && sm.student.user && sm.student.user.isActive)
+          .map((sm) => ({
+            student_id: sm.student.id,
+            name: sm.student.name,
+            enrollment_no: sm.student.enrollmentNo,
+            nfc_id: sm.student.nfcId,
+            batch_id: sm.student.batchId,
+            email: sm.student.email,
+            is_active: sm.student.user.isActive,
+          }));
+
+        // Fallback: If no explicit student_subject_mapping rows exist,
+        // all active students in the batch are enrolled
+        if (students.length === 0) {
+          const batchStudents = await prisma.student.findMany({
+            where: {
+              batchId: m.batch.id,
+              user: { isActive: true },
+            },
+            include: {
+              user: { select: { isActive: true } },
+            },
+            orderBy: { name: 'asc' },
+          });
+
+          students = batchStudents.map((st) => ({
+            student_id: st.id,
+            name: st.name,
+            enrollment_no: st.enrollmentNo,
+            nfc_id: st.nfcId,
+            batch_id: st.batchId,
+            email: st.email,
+            is_active: st.user?.isActive ?? true,
+          }));
+        }
+
+        return {
+          subject: {
+            id: m.subject.id,
+            course_code: m.subject.courseCode,
+            name: m.subject.name,
+          },
+          batch: {
+            id: m.batch.id,
+            name: m.batch.name,
+            program: m.batch.program,
+            semester: m.batch.semester,
+          },
+          students,
+        };
+      })
+    );
 
     return res.status(200).json({ data: assignments });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/teacher/students?subject_id={subjectId}&batch_id={batchId}
+ * Returns enrolled students for a specific subject and batch assigned to the teacher.
+ */
+async function getEnrolledStudents(req, res, next) {
+  try {
+    const teacher = getTeacherProfile(req);
+    const { subject_id, batch_id } = req.query;
+
+    if (!subject_id || !batch_id) {
+      return res.status(400).json({
+        error: { message: 'Query parameters subject_id and batch_id are required.' },
+      });
+    }
+
+    // Verify teacher is assigned to this subject and batch
+    const assignment = await prisma.teacherSubjectMapping.findUnique({
+      where: {
+        teacherId_subjectId_batchId: {
+          teacherId: teacher.id,
+          subjectId: subject_id,
+          batchId: batch_id,
+        },
+      },
+    });
+
+    if (!assignment) {
+      return res.status(403).json({
+        error: { message: 'Teacher is not assigned to this subject and batch combination.' },
+      });
+    }
+
+    // Fetch enrolled students
+    const mappings = await prisma.studentSubjectMapping.findMany({
+      where: {
+        subjectId: subject_id,
+        batchId: batch_id,
+      },
+      include: {
+        student: {
+          include: {
+            user: {
+              select: { isActive: true },
+            },
+          },
+        },
+      },
+      orderBy: {
+        student: { name: 'asc' },
+      },
+    });
+
+    let students = mappings
+      .filter((m) => m.student && m.student.user && m.student.user.isActive)
+      .map((m) => ({
+        student_id: m.student.id,
+        name: m.student.name,
+        enrollment_no: m.student.enrollmentNo,
+        nfc_id: m.student.nfcId,
+        batch_id: m.student.batchId,
+        email: m.student.email,
+        is_active: m.student.user.isActive,
+      }));
+
+    // Fallback: If no explicit student_subject_mapping rows exist,
+    // all active students belonging to the assigned batch are considered enrolled.
+    if (students.length === 0) {
+      const batchStudents = await prisma.student.findMany({
+        where: {
+          batchId: batch_id,
+          user: { isActive: true },
+        },
+        include: {
+          user: { select: { isActive: true } },
+        },
+        orderBy: { name: 'asc' },
+      });
+
+      students = batchStudents.map((st) => ({
+        student_id: st.id,
+        name: st.name,
+        enrollment_no: st.enrollmentNo,
+        nfc_id: st.nfcId,
+        batch_id: st.batchId,
+        email: st.email,
+        is_active: st.user?.isActive ?? true,
+      }));
+    }
+
+    return res.status(200).json({ data: students });
   } catch (error) {
     next(error);
   }
@@ -155,12 +312,21 @@ async function createAttendanceSession(req, res, next) {
         where: { subjectId: subject_id, batchId: batch_id },
       });
 
+      let enrolledStudentIds = enrolledStudents.map((es) => es.studentId);
+      if (enrolledStudentIds.length === 0) {
+        const batchStudents = await tx.student.findMany({
+          where: { batchId: batch_id, user: { isActive: true } },
+          select: { id: true },
+        });
+        enrolledStudentIds = batchStudents.map((s) => s.id);
+      }
+
       // Create default ABSENT attendance records
-      if (enrolledStudents.length > 0) {
+      if (enrolledStudentIds.length > 0) {
         await tx.attendance.createMany({
-          data: enrolledStudents.map((es) => ({
+          data: enrolledStudentIds.map((studentId) => ({
             sessionId: session.id,
-            studentId: es.studentId,
+            studentId,
             status: 'ABSENT',
           })),
           skipDuplicates: true,
@@ -482,6 +648,7 @@ module.exports = {
   getAssignedSubjects,
   getAssignedBatches,
   getAssignments,
+  getEnrolledStudents,
   createAttendanceSession,
   getAttendanceSessions,
   getAttendanceSessionById,

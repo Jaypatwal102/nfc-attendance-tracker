@@ -73,9 +73,12 @@ class AttendanceValidationService {
     });
 
     if (!studentSubjectMap) {
-      throw new Error(
-        `Student '${student.name}' is not enrolled in subject '${session.subject.name}' for batch '${session.batch.name}'`
-      );
+      // Fallback: If no explicit student-subject mapping exists, verify student belongs to session batch
+      if (student.batchId !== session.batchId) {
+        throw new Error(
+          `Student '${student.name}' is not enrolled in subject '${session.subject.name}' for batch '${session.batch.name}'`
+        );
+      }
     }
 
     // 5. Check whether attendance already exists

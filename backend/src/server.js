@@ -4,6 +4,7 @@ const helmet = require('helmet');
 require('dotenv').config();
 
 const { errorHandler } = require('./middleware/error.middleware');
+const logger = require('./utils/logger.util');
 
 // Route modules
 const authRoutes = require('./routes/auth.routes');
@@ -41,17 +42,32 @@ app.use('/api', publicRoutes);
 // Global 404 handler for unknown endpoints
 app.use((req, res) => {
   res.status(404).json({
-    error: { message: `Route '${req.originalUrl}' not found.` },
+    success: false,
+    message: `Resource '${req.originalUrl}' not found.`,
+    code: 'NOT_FOUND',
+    error: {
+      message: `Resource '${req.originalUrl}' not found.`,
+      code: 'NOT_FOUND',
+    },
   });
 });
 
-// Global error handling middleware
+// Global centralized error handling middleware
 app.use(errorHandler);
+
+// Process-level unhandled rejection / uncaught exception safety handlers
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled Promise Rejection caught at process level', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception caught at process level', err);
+});
 
 // Start server if not imported by test runner
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    logger.info(`Server is running on port ${PORT}`);
   });
 }
 

@@ -1,83 +1,92 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import DashboardLayout from '../../../components/layout/DashboardLayout';
-import StatCard from '../../../components/ui/StatCard';
-import LoadingSkeleton from '../../../components/ui/LoadingSkeleton';
-import EmptyState from '../../../components/ui/EmptyState';
-import { teacherApi } from '../../../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import DashboardLayout from '@/components/layout/DashboardLayout';
+import PageHeader from '@/components/layout/PageHeader';
+import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import ErrorState from '@/components/ui/ErrorState';
+import TeacherStatsCards from '@/components/features/attendance/TeacherStatsCards';
+import { teacherApi } from '@/services/api';
+import { getErrorMessage } from '@/utils/errorHandler';
 
 export default function TeacherStatisticsPage() {
   const [assignments, setAssignments] = useState([]);
   const [selectedAssignment, setSelectedAssignment] = useState('');
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
-  useEffect(() => {
-    async function loadAssignments() {
-      try {
-        const res = await teacherApi.getAssignments();
-        setAssignments(res.data.data);
-        if (res.data.data.length > 0) {
-          const first = res.data.data[0];
-          setSelectedAssignment(`${first.subject.id}|${first.batch.id}`);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
+  const loadAssignments = useCallback(async () => {
+    try {
+      const res = await teacherApi.getAssignments();
+      const list = res.data?.data || [];
+      setAssignments(list);
+      if (list.length > 0) {
+        const first = list[0];
+        setSelectedAssignment((prev) => prev || `${first.subject.id}|${first.batch.id}`);
       }
+    } catch (err) {
+      setFetchError(getErrorMessage(err, 'Unable to load course assignments.'));
     }
-    loadAssignments();
   }, []);
 
   useEffect(() => {
-    async function fetchStats() {
-      if (!selectedAssignment) return;
-      const [subjectId, batchId] = selectedAssignment.split('|');
+    loadAssignments();
+  }, [loadAssignments]);
 
-      setLoading(true);
-      try {
-        const res = await teacherApi.getStatistics({
-          subject_id: subjectId,
-          batch_id: batchId,
-        });
-        setStats(res.data.data);
-      } catch (err) {
-        console.error(err);
-        setStats(null);
-      } finally {
-        setLoading(false);
-      }
+  const fetchStats = useCallback(async () => {
+    if (!selectedAssignment) return;
+    const [subjectId, batchId] = selectedAssignment.split('|');
+
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const res = await teacherApi.getStatistics({
+        subject_id: subjectId,
+        batch_id: batchId,
+      });
+      setStats(res.data?.data || null);
+    } catch (err) {
+      setFetchError(
+        getErrorMessage(
+          err,
+          'Unable to calculate attendance statistics for this course and batch. Please retry.'
+        )
+      );
+      setStats(null);
+    } finally {
+      setLoading(false);
     }
-    fetchStats();
   }, [selectedAssignment]);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   return (
     <DashboardLayout allowedRoles={['TEACHER']}>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
-            Attendance Statistics
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Aggregate stats and attendance performance metrics for your courses.
-          </p>
-        </div>
+        <PageHeader
+          title="Attendance Statistics"
+          description="Aggregate stats and attendance performance metrics for your courses."
+        />
 
         {/* Assignment Selector */}
-        <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 max-w-xl">
-          <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+        <div className="bg-white dark:bg-slate-800/80 p-4 rounded-xl border border-slate-200 dark:border-slate-700/60 max-w-xl shadow-sm transition-colors duration-200">
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
             Select Course & Batch Assignment
           </label>
           <select
             value={selectedAssignment}
             onChange={(e) => setSelectedAssignment(e.target.value)}
-            className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
           >
             {assignments.map((a) => (
-              <option key={`${a.subject.id}|${a.batch.id}`} value={`${a.subject.id}|${a.batch.id}`}>
-                {a.subject.course_code} - {a.subject.name} ({a.batch.name})
+              <option
+                key={`${a.subject.id}|${a.batch.id}`}
+                value={`${a.subject.id}|${a.batch.id}`}
+              >
+                {a.subject.course_code || a.subject.courseCode} - {a.subject.name} ({a.batch.name})
               </option>
             ))}
           </select>
@@ -85,40 +94,14 @@ export default function TeacherStatisticsPage() {
 
         {loading ? (
           <LoadingSkeleton rows={3} />
-        ) : !stats ? (
-          <EmptyState
-            title="No statistics data"
-            description="Select an assigned subject and batch above to calculate metrics."
+        ) : fetchError ? (
+          <ErrorState
+            title="Failed to Load Statistics"
+            message={fetchError}
+            onRetry={fetchStats}
           />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <StatCard
-              title="Average Attendance Rate"
-              value={`${stats.attendance_percentage}%`}
-              subtitle="Batch-wide average"
-              color={stats.attendance_percentage >= 75 ? 'emerald' : 'rose'}
-            />
-            <StatCard
-              title="Enrolled Students"
-              value={stats.total_students}
-              color="indigo"
-            />
-            <StatCard
-              title="Total Sessions Conducted"
-              value={stats.total_sessions}
-              color="sky"
-            />
-            <StatCard
-              title="Total Present Marks"
-              value={stats.present_count}
-              color="emerald"
-            />
-            <StatCard
-              title="Total Absent Marks"
-              value={stats.absent_count}
-              color="rose"
-            />
-          </div>
+          <TeacherStatsCards stats={stats} />
         )}
       </div>
     </DashboardLayout>

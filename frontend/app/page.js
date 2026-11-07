@@ -22,9 +22,9 @@ export default function Home() {
   }, [loading, isAuthenticated, role, router]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center bg-slate-950 text-slate-100">
+    <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-200">
       <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-      <p className="text-slate-400 text-sm font-medium">Redirecting to portal...</p>
+      <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Redirecting to portal...</p>
     </div>
   );
 }

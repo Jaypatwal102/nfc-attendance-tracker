@@ -1,91 +1,81 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import DashboardLayout from '../../../components/layout/DashboardLayout';
-import Modal from '../../../components/ui/Modal';
-import Toast from '../../../components/ui/Toast';
-import Badge from '../../../components/ui/Badge';
-import LoadingSkeleton from '../../../components/ui/LoadingSkeleton';
-import EmptyState from '../../../components/ui/EmptyState';
-import { adminApi, publicApi } from '../../../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import DashboardLayout from '@/components/layout/DashboardLayout';
+import PageHeader from '@/components/layout/PageHeader';
+import Button from '@/components/ui/Button';
+import Toast from '@/components/ui/Toast';
+import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import ErrorState from '@/components/ui/ErrorState';
+import StudentsTable from '@/components/features/students/StudentsTable';
+import EditStudentModal from '@/components/features/students/EditStudentModal';
+import { adminApi, publicApi } from '@/services/api';
+import { getErrorMessage } from '@/utils/errorHandler';
 
 export default function AdminStudentsPage() {
   const [students, setStudents] = useState([]);
   const [batches, setBatches] = useState([]);
-  const [search, setSearch] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   // Edit Modal State
   const [editStudent, setEditStudent] = useState(null);
-  const [editName, setEditName] = useState('');
-  const [editNfcId, setEditNfcId] = useState('');
-  const [editBatchId, setEditBatchId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info' });
 
-  useEffect(() => {
-    async function loadBatches() {
-      try {
-        const res = await publicApi.getBatches();
-        setBatches(res.data.data);
-      } catch (err) {
-        console.error(err);
-      }
-    }
-    loadBatches();
-  }, []);
-
-  const fetchStudents = async () => {
-    setLoading(true);
+  const fetchBatches = async () => {
     try {
-      const params = {};
-      if (search) params.search = search;
-      if (selectedBatch) params.batch_id = selectedBatch;
-
-      const res = await adminApi.getStudents(params);
-      setStudents(res.data.data);
+      const res = await publicApi.getBatches();
+      setBatches(res.data?.data || []);
     } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+      // Non-blocking fallback
     }
   };
 
+  const fetchStudents = useCallback(async () => {
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const params = {};
+      if (selectedBatch) params.batch_id = selectedBatch;
+      if (search) params.search = search;
+
+      const res = await adminApi.getStudents(params);
+      setStudents(res.data?.data || []);
+    } catch (err) {
+      setFetchError(getErrorMessage(err, 'Unable to load students directory. Please retry.'));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedBatch, search]);
+
+  useEffect(() => {
+    fetchBatches();
+  }, []);
+
   useEffect(() => {
     fetchStudents();
-  }, [selectedBatch]);
+  }, [fetchStudents]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     fetchStudents();
   };
 
-  const handleOpenEdit = (st) => {
-    setEditStudent(st);
-    setEditName(st.name);
-    setEditNfcId(st.nfcId || '');
-    setEditBatchId(st.batchId);
-  };
-
-  const handleSaveEdit = async (e) => {
-    e.preventDefault();
-    if (!editStudent) return;
-
+  const handleSaveEdit = async ({ id, name, nfc_id, batch_id }) => {
     setIsSaving(true);
     try {
-      await adminApi.updateStudent(editStudent.id, {
-        name: editName,
-        nfc_id: editNfcId,
-        batch_id: editBatchId,
-      });
-
-      setToast({ message: `Updated student ${editName} successfully!`, type: 'success' });
+      await adminApi.updateStudent(id, { name, nfc_id, batch_id });
+      setToast({ message: `Updated student ${name} successfully!`, type: 'success' });
       setEditStudent(null);
       fetchStudents();
     } catch (err) {
-      const msg = err.response?.data?.error?.message || 'Failed to update student profile.';
-      setToast({ message: msg, type: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Failed to update student profile. Please try again.'),
+        type: 'error',
+      });
     } finally {
       setIsSaving(false);
     }
@@ -93,22 +83,25 @@ export default function AdminStudentsPage() {
 
   return (
     <DashboardLayout allowedRoles={['ADMIN']}>
-      <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'info' })}
+      />
 
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
-            Students Directory
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Manage enrolled students, assign NFC ID tags, and update batch allocations.
-          </p>
-        </div>
+        <PageHeader
+          title="Students Directory"
+          description="Manage enrolled students, assign NFC ID tags, and update batch allocations."
+        />
 
         {/* Filters */}
-        <form onSubmit={handleSearchSubmit} className="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 flex flex-wrap gap-4 items-center">
+        <form
+          onSubmit={handleSearchSubmit}
+          className="bg-white dark:bg-slate-800/80 p-4 rounded-xl border border-slate-200 dark:border-slate-700/60 shadow-sm flex flex-wrap gap-4 items-center transition-colors duration-200"
+        >
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1">
               Search Student
             </label>
             <input
@@ -116,18 +109,18 @@ export default function AdminStudentsPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by name, enrollment no, or email..."
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-500"
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition"
             />
           </div>
 
           <div className="w-48">
-            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1">
               Batch
             </label>
             <select
               value={selectedBatch}
               onChange={(e) => setSelectedBatch(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200"
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
             >
               <option value="">All Batches</option>
               {batches.map((b) => (
@@ -138,124 +131,41 @@ export default function AdminStudentsPage() {
             </select>
           </div>
 
-          <button
-            type="submit"
-            className="self-end px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition"
-          >
+          <Button type="submit" className="self-end">
             Search
-          </button>
+          </Button>
         </form>
 
-        {/* Students Table */}
-        <div className="bg-slate-800/80 rounded-xl border border-slate-700/60 overflow-hidden backdrop-blur-sm">
+        <div className="bg-white dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/60 overflow-hidden backdrop-blur-sm shadow-sm transition-colors duration-200">
           {loading ? (
             <div className="p-6">
               <LoadingSkeleton rows={5} />
             </div>
-          ) : students.length === 0 ? (
-            <EmptyState title="No students found" description="No student records match your query." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-300">
-                <thead className="bg-slate-800/90 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-700/60">
-                  <tr>
-                    <th className="px-6 py-3.5">Enrollment No</th>
-                    <th className="px-6 py-3.5">Full Name</th>
-                    <th className="px-6 py-3.5">Email</th>
-                    <th className="px-6 py-3.5">Batch</th>
-                    <th className="px-6 py-3.5 text-center">NFC Tag ID</th>
-                    <th className="px-6 py-3.5 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700/50">
-                  {students.map((st) => (
-                    <tr key={st.id} className="hover:bg-slate-700/30 transition">
-                      <td className="px-6 py-4 font-mono font-semibold text-indigo-400">{st.enrollmentNo}</td>
-                      <td className="px-6 py-4 font-semibold text-slate-100">{st.name}</td>
-                      <td className="px-6 py-4 text-slate-300">{st.email}</td>
-                      <td className="px-6 py-4 font-medium text-slate-200">{st.batch?.name || '—'}</td>
-                      <td className="px-6 py-4 text-center font-mono">
-                        {st.nfcId ? (
-                          <Badge variant="present">{st.nfcId}</Badge>
-                        ) : (
-                          <span className="text-slate-500 italic">Not Assigned</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <button
-                          onClick={() => handleOpenEdit(st)}
-                          className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium rounded transition"
-                        >
-                          Edit Profile
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          ) : fetchError ? (
+            <div className="p-6">
+              <ErrorState
+                title="Failed to Load Students"
+                message={fetchError}
+                onRetry={fetchStudents}
+              />
             </div>
+          ) : (
+            <StudentsTable
+              students={students}
+              onEdit={(student) => setEditStudent(student)}
+            />
           )}
         </div>
       </div>
 
-      {/* Edit Student Modal */}
-      <Modal isOpen={!!editStudent} onClose={() => setEditStudent(null)} title={`Edit Student: ${editStudent?.name}`}>
-        <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
-          <div>
-            <label className="block font-semibold text-slate-300 uppercase tracking-wider mb-1">Full Name</label>
-            <input
-              type="text"
-              required
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200"
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-300 uppercase tracking-wider mb-1">NFC Tag ID</label>
-            <input
-              type="text"
-              value={editNfcId}
-              onChange={(e) => setEditNfcId(e.target.value)}
-              placeholder="e.g. NFC_TAG_MCA001"
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500"
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-300 uppercase tracking-wider mb-1">Batch Assignment</label>
-            <select
-              value={editBatchId}
-              onChange={(e) => setEditBatchId(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200"
-            >
-              {batches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} ({b.program})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex gap-3 pt-3">
-            <button
-              type="button"
-              onClick={() => setEditStudent(null)}
-              className="flex-1 py-2.5 rounded-lg bg-slate-700 text-slate-300 font-semibold"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500"
-            >
-              {isSaving ? 'Saving...' : 'Save Profile'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      <EditStudentModal
+        student={editStudent}
+        batches={batches}
+        isOpen={!!editStudent}
+        onClose={() => setEditStudent(null)}
+        onSave={handleSaveEdit}
+        isSaving={isSaving}
+      />
     </DashboardLayout>
   );
 }

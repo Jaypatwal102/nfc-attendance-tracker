@@ -1,13 +1,16 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import DashboardLayout from '../../../components/layout/DashboardLayout';
-import Badge from '../../../components/ui/Badge';
-import Modal from '../../../components/ui/Modal';
-import Toast from '../../../components/ui/Toast';
-import LoadingSkeleton from '../../../components/ui/LoadingSkeleton';
-import EmptyState from '../../../components/ui/EmptyState';
-import { teacherApi } from '../../../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import DashboardLayout from '@/components/layout/DashboardLayout';
+import PageHeader from '@/components/layout/PageHeader';
+import Toast from '@/components/ui/Toast';
+import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import ErrorState from '@/components/ui/ErrorState';
+import AttendanceFilters from '@/components/features/attendance/AttendanceFilters';
+import AttendanceRecordsTable from '@/components/features/attendance/AttendanceRecordsTable';
+import EditAttendanceRecordModal from '@/components/features/attendance/EditAttendanceRecordModal';
+import { teacherApi } from '@/services/api';
+import { getErrorMessage } from '@/utils/errorHandler';
 
 export default function TeacherAttendanceManagement() {
   const [assignments, setAssignments] = useState([]);
@@ -16,11 +19,10 @@ export default function TeacherAttendanceManagement() {
   const [selectedStatus, setSelectedStatus] = useState('');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   // Edit Modal State
   const [editRecord, setEditRecord] = useState(null);
-  const [editStatus, setEditStatus] = useState('PRESENT');
-  const [editRemark, setEditRemark] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info' });
 
@@ -28,16 +30,17 @@ export default function TeacherAttendanceManagement() {
     async function loadAssignments() {
       try {
         const res = await teacherApi.getAssignments();
-        setAssignments(res.data.data);
+        setAssignments(res.data?.data || []);
       } catch (err) {
-        console.error(err);
+        // Non-blocking fallback
       }
     }
     loadAssignments();
   }, []);
 
-  const fetchRecords = async () => {
+  const fetchRecords = useCallback(async () => {
     setLoading(true);
+    setFetchError(null);
     try {
       const params = {};
       if (selectedSubject) params.subject_id = selectedSubject;
@@ -45,41 +48,30 @@ export default function TeacherAttendanceManagement() {
       if (selectedStatus) params.status = selectedStatus;
 
       const res = await teacherApi.getAttendance(params);
-      setRecords(res.data.data);
+      setRecords(res.data?.data || []);
     } catch (err) {
-      console.error(err);
+      setFetchError(getErrorMessage(err, 'Unable to load attendance records. Please retry.'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedSubject, selectedBatch, selectedStatus]);
 
   useEffect(() => {
     fetchRecords();
-  }, [selectedSubject, selectedBatch, selectedStatus]);
+  }, [fetchRecords]);
 
-  const handleOpenEdit = (rec) => {
-    setEditRecord(rec);
-    setEditStatus(rec.status);
-    setEditRemark(rec.remark || '');
-  };
-
-  const handleSaveEdit = async (e) => {
-    e.preventDefault();
-    if (!editRecord) return;
-
+  const handleSaveEdit = async ({ id, status, remark }) => {
     setIsSaving(true);
     try {
-      await teacherApi.updateAttendance(editRecord.id, {
-        status: editStatus,
-        remark: editRemark,
-      });
-
+      await teacherApi.updateAttendance(id, { status, remark });
       setToast({ message: 'Attendance record updated successfully!', type: 'success' });
       setEditRecord(null);
       fetchRecords();
     } catch (err) {
-      const msg = err.response?.data?.error?.message || 'Failed to update attendance record.';
-      setToast({ message: msg, type: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Failed to update attendance record. Please try again.'),
+        type: 'error',
+      });
     } finally {
       setIsSaving(false);
     }
@@ -87,189 +79,57 @@ export default function TeacherAttendanceManagement() {
 
   return (
     <DashboardLayout allowedRoles={['TEACHER']}>
-      <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'info' })}
+      />
 
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
-            Attendance Records
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Filter, inspect, and manually adjust student attendance status.
-          </p>
-        </div>
+        <PageHeader
+          title="Attendance Records"
+          description="Filter, inspect, and manually adjust student attendance status."
+        />
 
-        {/* Filters */}
-        <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700/60 flex flex-wrap gap-4 items-center">
-          <div className="flex-1 min-w-[180px]">
-            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Filter Subject
-            </label>
-            <select
-              value={selectedSubject}
-              onChange={(e) => setSelectedSubject(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">All Assigned Subjects</option>
-              {Array.from(new Set(assignments.map((a) => a.subject.id))).map((subId) => {
-                const sub = assignments.find((a) => a.subject.id === subId)?.subject;
-                return (
-                  <option key={sub.id} value={sub.id}>
-                    {sub.course_code} - {sub.name}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
+        <AttendanceFilters
+          assignments={assignments}
+          selectedSubject={selectedSubject}
+          setSelectedSubject={setSelectedSubject}
+          selectedBatch={selectedBatch}
+          setSelectedBatch={setSelectedBatch}
+          selectedStatus={selectedStatus}
+          setSelectedStatus={setSelectedStatus}
+        />
 
-          <div className="flex-1 min-w-[180px]">
-            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Filter Batch
-            </label>
-            <select
-              value={selectedBatch}
-              onChange={(e) => setSelectedBatch(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">All Assigned Batches</option>
-              {Array.from(new Set(assignments.map((a) => a.batch.id))).map((batchId) => {
-                const b = assignments.find((a) => a.batch.id === batchId)?.batch;
-                return (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-
-          <div className="w-40">
-            <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Filter Status
-            </label>
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">All Statuses</option>
-              <option value="PRESENT">PRESENT</option>
-              <option value="ABSENT">ABSENT</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="bg-slate-800/80 rounded-xl border border-slate-700/60 overflow-hidden backdrop-blur-sm">
+        <div className="bg-white dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/60 overflow-hidden backdrop-blur-sm shadow-sm transition-colors duration-200">
           {loading ? (
             <div className="p-6">
               <LoadingSkeleton rows={5} />
             </div>
-          ) : records.length === 0 ? (
-            <EmptyState
-              title="No attendance records found"
-              description="No records match your active search filters."
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-300">
-                <thead className="bg-slate-800/90 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-700/60">
-                  <tr>
-                    <th className="px-6 py-3.5">Student</th>
-                    <th className="px-6 py-3.5">Enrollment No</th>
-                    <th className="px-6 py-3.5">Subject</th>
-                    <th className="px-6 py-3.5">Batch</th>
-                    <th className="px-6 py-3.5">Date</th>
-                    <th className="px-6 py-3.5">Remark</th>
-                    <th className="px-6 py-3.5 text-center">Status</th>
-                    <th className="px-6 py-3.5 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700/50">
-                  {records.map((rec) => (
-                    <tr key={rec.id} className="hover:bg-slate-700/30 transition">
-                      <td className="px-6 py-4 font-semibold text-slate-100">{rec.student?.name}</td>
-                      <td className="px-6 py-4 font-mono text-indigo-400">{rec.student?.enrollmentNo}</td>
-                      <td className="px-6 py-4">{rec.session?.subject?.name}</td>
-                      <td className="px-6 py-4 font-medium">{rec.session?.batch?.name}</td>
-                      <td className="px-6 py-4 font-mono text-slate-400">
-                        {new Date(rec.session?.sessionDate).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 italic text-slate-400">{rec.remark || '—'}</td>
-                      <td className="px-6 py-4 text-center">
-                        <Badge variant={rec.status === 'PRESENT' ? 'present' : 'absent'}>
-                          {rec.status}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <button
-                          onClick={() => handleOpenEdit(rec)}
-                          className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium rounded transition"
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          ) : fetchError ? (
+            <div className="p-6">
+              <ErrorState
+                title="Failed to Load Attendance Records"
+                message={fetchError}
+                onRetry={fetchRecords}
+              />
             </div>
+          ) : (
+            <AttendanceRecordsTable
+              records={records}
+              onEdit={(rec) => setEditRecord(rec)}
+            />
           )}
         </div>
       </div>
 
-      {/* Edit Record Modal */}
-      <Modal
+      <EditAttendanceRecordModal
+        record={editRecord}
         isOpen={!!editRecord}
         onClose={() => setEditRecord(null)}
-        title={`Correction: ${editRecord?.student?.name}`}
-      >
-        <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
-          <div>
-            <label className="block font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              Attendance Status
-            </label>
-            <select
-              value={editStatus}
-              onChange={(e) => setEditStatus(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200"
-            >
-              <option value="PRESENT">PRESENT</option>
-              <option value="ABSENT">ABSENT</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              Adjustment Remark
-            </label>
-            <input
-              type="text"
-              value={editRemark}
-              onChange={(e) => setEditRemark(e.target.value)}
-              placeholder="e.g. Late arrival, Approved leave"
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 placeholder:text-slate-500"
-            />
-          </div>
-
-          <div className="flex gap-3 pt-3">
-            <button
-              type="button"
-              onClick={() => setEditRecord(null)}
-              className="flex-1 py-2 rounded-lg bg-slate-700 text-slate-300 font-semibold"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500"
-            >
-              {isSaving ? 'Saving...' : 'Save Correction'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+        onSave={handleSaveEdit}
+        isSaving={isSaving}
+      />
     </DashboardLayout>
   );
 }

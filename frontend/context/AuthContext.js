@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { authApi } from '../services/api';
+import { getErrorMessage, logDevError } from '../utils/errorHandler';
 
 const AuthContext = createContext(null);
 
@@ -32,7 +33,7 @@ export function AuthProvider({ children }) {
           setUser(null);
         }
       } catch (error) {
-        console.error('Failed to authenticate token:', error);
+        logDevError('Auth Initialization Check', error);
         localStorage.removeItem('token');
         setToken(null);
         setUser(null);
@@ -67,7 +68,7 @@ export function AuthProvider({ children }) {
 
       return { success: true, user: userData };
     } catch (error) {
-      const message = error.response?.data?.error?.message || 'Login failed. Please check credentials.';
+      const message = getErrorMessage(error, 'Invalid email or password. Please try again.');
       return { success: false, error: message };
     } finally {
       setLoading(false);

@@ -95,23 +95,64 @@ class AttendanceCalculationService {
       where: { batchId, subjectId },
       include: {
         student: {
-          select: { id: true, name: true, enrollmentNo: true, email: true },
+          select: {
+            id: true,
+            name: true,
+            enrollmentNo: true,
+            email: true,
+            user: { select: { email: true, isActive: true } },
+          },
         },
       },
     });
 
+    let studentsToEvaluate = studentMappings
+      .filter((m) => m.student && (m.student.user ? m.student.user.isActive : true))
+      .map((m) => ({
+        id: m.student.id,
+        name: m.student.name,
+        enrollmentNo: m.student.enrollmentNo,
+        email: m.student.email || m.student.user?.email,
+      }));
+
+    // Fallback: If no explicit student_subject_mapping rows exist,
+    // evaluate all active students belonging to the batch
+    if (studentsToEvaluate.length === 0) {
+      const batchStudents = await prisma.student.findMany({
+        where: {
+          batchId,
+          user: { isActive: true },
+        },
+        select: {
+          id: true,
+          name: true,
+          enrollmentNo: true,
+          email: true,
+          user: { select: { email: true } },
+        },
+      });
+
+      studentsToEvaluate = batchStudents.map((s) => ({
+        id: s.id,
+        name: s.name,
+        enrollmentNo: s.enrollmentNo,
+        email: s.email || s.user?.email,
+      }));
+    }
+
     const lowAttendanceList = [];
 
-    for (const mapping of studentMappings) {
+    for (const student of studentsToEvaluate) {
       const summary = await this.calculateStudentSubjectAttendance(
-        mapping.studentId,
+        student.id,
         subjectId
       );
 
+      // Condition: student attendance is strictly below the dynamic threshold
       if (summary.totalSessions > 0 && summary.attendancePercentage < minThreshold) {
         lowAttendanceList.push({
           ...summary,
-          email: mapping.student.email,
+          email: student.email,
           threshold: minThreshold,
           isLowAttendance: true,
         });
@@ -122,7 +163,7 @@ class AttendanceCalculationService {
       batchId,
       subjectId,
       threshold: minThreshold,
-      totalStudentsEvaluated: studentMappings.length,
+      totalStudentsEvaluated: studentsToEvaluate.length,
       lowAttendanceCount: lowAttendanceList.length,
       students: lowAttendanceList,
     };

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "test:email": "node tests/resend_email.test.js",
     "test:mobile-api": "node tests/verify_mobile_integration.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -27,7 +28,7 @@
     "express-validator": "^7.3.2",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.3",
-    "nodemailer": "^6.10.1",
+    "resend": "^6.37.0",
     "ws": "^8.22.1"
   },
   "devDependencies": {

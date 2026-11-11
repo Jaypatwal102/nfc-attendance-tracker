@@ -1,6 +1,10 @@
 const prisma = require('../config/prisma');
 const attendanceCalculationService = require('../services/attendanceCalculation.service');
-const { sendLowAttendanceEmail } = require('../utils/email.util');
+const emailService = require('../services/email.service');
+const logger = require('../utils/logger.util');
+
+// In-memory cache for dynamic teacher-configured attendance thresholds per assignment
+const teacherThresholdCache = new Map();
 
 /**
  * Gets active teacher profile for the current request.
@@ -569,10 +573,35 @@ async function getLowAttendance(req, res, next) {
       return res.status(400).json({ error: { message: 'Query parameters subject_id and batch_id are required.' } });
     }
 
+    // Verify teacher assignment
+    const assignment = await prisma.teacherSubjectMapping.findUnique({
+      where: {
+        teacherId_subjectId_batchId: {
+          teacherId: teacher.id,
+          subjectId: subject_id,
+          batchId: batch_id,
+        },
+      },
+    });
+
+    if (!assignment) {
+      return res.status(403).json({ error: { message: 'Teacher is not assigned to this subject/batch.' } });
+    }
+
+    const parsedThreshold =
+      threshold !== undefined && threshold !== null && threshold !== '' && !isNaN(Number(threshold))
+        ? Number(threshold)
+        : undefined;
+
+    // Cache the teacher's active threshold for this assignment
+    if (parsedThreshold !== undefined) {
+      teacherThresholdCache.set(`${teacher.id}:${subject_id}:${batch_id}`, parsedThreshold);
+    }
+
     const result = await attendanceCalculationService.getLowAttendanceStudents({
       batchId: batch_id,
       subjectId: subject_id,
-      threshold: threshold ? Number(threshold) : undefined,
+      threshold: parsedThreshold,
     });
 
     return res.status(200).json({ data: result.students });
@@ -584,13 +613,13 @@ async function getLowAttendance(req, res, next) {
 async function sendLowAttendanceEmailAction(req, res, next) {
   try {
     const teacher = getTeacherProfile(req);
-    const { subject_id, batch_id } = req.body;
+    const { subject_id, batch_id, threshold } = req.body;
 
     if (!subject_id || !batch_id) {
       return res.status(400).json({ error: { message: 'Required body parameters: subject_id, batch_id' } });
     }
 
-    // Verify teacher assignment
+    // Verify teacher assignment & authorization
     const assignment = await prisma.teacherSubjectMapping.findUnique({
       where: {
         teacherId_subjectId_batchId: {
@@ -599,44 +628,70 @@ async function sendLowAttendanceEmailAction(req, res, next) {
           batchId: batch_id,
         },
       },
-      include: { subject: true },
+      include: {
+        subject: true,
+        batch: true,
+        teacher: true,
+      },
     });
 
     if (!assignment) {
       return res.status(403).json({ error: { message: 'Teacher is not assigned to this subject/batch.' } });
     }
 
+    // Determine dynamic threshold:
+    // 1. Explicitly provided in req.body.threshold
+    // 2. OR provided in req.query.threshold
+    // 3. OR remembered from the teacher's recent UI configuration for this assignment
+    // 4. OR system-wide attendance setting default
+    let effectiveThreshold;
+    if (threshold !== undefined && threshold !== null && threshold !== '' && !isNaN(Number(threshold))) {
+      effectiveThreshold = Number(threshold);
+    } else if (req.query?.threshold !== undefined && req.query?.threshold !== '' && !isNaN(Number(req.query.threshold))) {
+      effectiveThreshold = Number(req.query.threshold);
+    } else if (teacherThresholdCache.has(`${teacher.id}:${subject_id}:${batch_id}`)) {
+      effectiveThreshold = teacherThresholdCache.get(`${teacher.id}:${subject_id}:${batch_id}`);
+    } else {
+      effectiveThreshold = await attendanceCalculationService.getMinimumThreshold();
+    }
+
+    logger.info(`Teacher ${teacher.id} initiating low attendance emails for ${assignment.subject.name} (${assignment.batch.name}) with threshold ${effectiveThreshold}%`);
+
+    // Retrieve eligible students (strictly attendancePercentage < effectiveThreshold)
     const lowAttData = await attendanceCalculationService.getLowAttendanceStudents({
       batchId: batch_id,
       subjectId: subject_id,
+      threshold: effectiveThreshold,
     });
 
-    let emailsSent = 0;
-    let emailsFailed = 0;
-
-    for (const student of lowAttData.students) {
-      const dispatch = await sendLowAttendanceEmail({
-        to: student.email,
-        studentName: student.studentName,
-        subjectName: assignment.subject.name,
-        percentage: student.attendancePercentage,
-        threshold: lowAttData.threshold,
-        studentId: student.studentId,
-        subjectId: subject_id,
+    // If no students are below the threshold, return cleanly
+    if (!lowAttData.students || lowAttData.students.length === 0) {
+      return res.status(200).json({
+        data: {
+          total_students_evaluated: lowAttData.totalStudentsEvaluated,
+          total_low_attendance_students: 0,
+          emails_sent: 0,
+          emails_failed: 0,
+          message: 'No students currently fall below the configured attendance threshold.',
+        },
       });
-
-      if (dispatch.success) {
-        emailsSent++;
-      } else {
-        emailsFailed++;
-      }
     }
+
+    // Dispatch emails via Resend service
+    const dispatchSummary = await emailService.sendBatchLowAttendanceAlerts({
+      students: lowAttData.students,
+      subjectName: assignment.subject.name,
+      subjectId: subject_id,
+      threshold: effectiveThreshold,
+      teacherName: assignment.teacher?.name,
+    });
 
     return res.status(200).json({
       data: {
+        total_students_evaluated: lowAttData.totalStudentsEvaluated,
         total_low_attendance_students: lowAttData.students.length,
-        emails_sent: emailsSent,
-        emails_failed: emailsFailed,
+        emails_sent: dispatchSummary.emailsSent,
+        emails_failed: dispatchSummary.emailsFailed,
       },
     });
   } catch (error) {

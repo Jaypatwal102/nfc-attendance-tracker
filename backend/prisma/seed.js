@@ -109,38 +109,17 @@ async function main() {
   });
   console.log(`✅ Teacher Demo Account initialized: ${teacherUser.email}`);
 
-  // 6. Demo Student Users (student.demo@nfc-tracker.local & student2.demo@nfc-tracker.local)
+  // 6. Demo Student Users (Student 1: jaypatwal1@gmail.com, Student 2: jaypatwal102@gmail.com)
   const studentPasswordHash = await hashPassword('DemoStudent@2026!');
 
-  // Student 1 (Good Attendance: ~90%)
-  const student1User = await prisma.user.upsert({
-    where: { email: 'student.demo@nfc-tracker.local' },
-    update: { passwordHash: studentPasswordHash, role: Role.STUDENT, isActive: true },
-    create: {
-      email: 'student.demo@nfc-tracker.local',
-      passwordHash: studentPasswordHash,
-      role: Role.STUDENT,
-      isActive: true,
-      student: {
-        create: {
-          name: 'Jane Doe',
-          enrollmentNo: 'MCA2024-DEMO-01',
-          nfcId: 'DEMO-NFC-001',
-          email: 'student.demo@nfc-tracker.local',
-          batchId: batch.id,
-        },
-      },
-    },
-    include: { student: true },
-  });
-  console.log(`✅ Student Demo Account 1 initialized: ${student1User.email}`);
-
-  // Student 2 (Low Attendance: < 75%)
+  // Student 2 (Rahul Patwal - Low Attendance: < 75%)
+  // Note: We update Student 2 to jaypatwal102@gmail.com first to free up jaypatwal1@gmail.com for Student 1
   let student2User = await prisma.user.findFirst({
     where: {
       OR: [
-        { email: 'jay.mca.nita@gmail.com' },
+        { email: 'jaypatwal102@gmail.com' },
         { email: 'jaypatwal1@gmail.com' },
+        { email: 'jay.mca.nita@gmail.com' },
         { email: 'student2.demo@nfc-tracker.local' },
         { student: { enrollmentNo: 'MCA2024-DEMO-02' } },
       ],
@@ -151,7 +130,7 @@ async function main() {
   if (!student2User) {
     student2User = await prisma.user.create({
       data: {
-        email: 'jay.mca.nita@gmail.com',
+        email: 'jaypatwal102@gmail.com',
         passwordHash: studentPasswordHash,
         role: Role.STUDENT,
         isActive: true,
@@ -159,8 +138,8 @@ async function main() {
           create: {
             name: 'Rahul Patwal',
             enrollmentNo: 'MCA2024-DEMO-02',
-            nfcId: 'DEMO-NFC-002',
-            email: 'jay.mca.nita@gmail.com',
+            nfcId: '53F391BF140001',
+            email: 'jaypatwal102@gmail.com',
             batchId: batch.id,
           },
         },
@@ -168,15 +147,21 @@ async function main() {
       include: { student: true },
     });
   } else {
-    // Update existing user and student email to jay.mca.nita@gmail.com
+    // Update existing user and student email to jaypatwal102@gmail.com
     await prisma.user.update({
       where: { id: student2User.id },
-      data: { email: 'jay.mca.nita@gmail.com', passwordHash: studentPasswordHash },
+      data: { email: 'jaypatwal102@gmail.com', passwordHash: studentPasswordHash },
     });
     if (student2User.student) {
       await prisma.student.update({
         where: { id: student2User.student.id },
-        data: { email: 'jay.mca.nita@gmail.com', name: 'Rahul Patwal' },
+        data: {
+          email: 'jaypatwal102@gmail.com',
+          name: 'Rahul Patwal',
+          nfcId: '53F391BF140001',
+          enrollmentNo: 'MCA2024-DEMO-02',
+          batchId: batch.id,
+        },
       });
     }
     student2User = await prisma.user.findUnique({
@@ -185,6 +170,61 @@ async function main() {
     });
   }
   console.log(`✅ Low Attendance Student Demo Account 2 initialized: ${student2User.email}`);
+
+  // Student 1 (Jane Doe - Good Attendance: ~90%)
+  let student1User = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { email: 'jaypatwal1@gmail.com' },
+        { email: 'student.demo@nfc-tracker.local' },
+        { student: { enrollmentNo: 'MCA2024-DEMO-01' } },
+      ],
+    },
+    include: { student: true },
+  });
+
+  if (!student1User) {
+    student1User = await prisma.user.create({
+      data: {
+        email: 'jaypatwal1@gmail.com',
+        passwordHash: studentPasswordHash,
+        role: Role.STUDENT,
+        isActive: true,
+        student: {
+          create: {
+            name: 'Jane Doe',
+            enrollmentNo: 'MCA2024-DEMO-01',
+            nfcId: '53FA91BF140001',
+            email: 'jaypatwal1@gmail.com',
+            batchId: batch.id,
+          },
+        },
+      },
+      include: { student: true },
+    });
+  } else {
+    await prisma.user.update({
+      where: { id: student1User.id },
+      data: { email: 'jaypatwal1@gmail.com', passwordHash: studentPasswordHash },
+    });
+    if (student1User.student) {
+      await prisma.student.update({
+        where: { id: student1User.student.id },
+        data: {
+          name: 'Jane Doe',
+          enrollmentNo: 'MCA2024-DEMO-01',
+          nfcId: '53FA91BF140001',
+          email: 'jaypatwal1@gmail.com',
+          batchId: batch.id,
+        },
+      });
+    }
+    student1User = await prisma.user.findUnique({
+      where: { id: student1User.id },
+      include: { student: true },
+    });
+  }
+  console.log(`✅ Student Demo Account 1 initialized: ${student1User.email}`);
 
   // 7. Teacher Subject Batch Mappings
   if (teacherUser.teacher) {
@@ -233,43 +273,105 @@ async function main() {
 
   // 9. Generate Demo Attendance Sessions & Attendance Records
   if (teacherUser.teacher && student1User.student && student2User.student) {
-    // Create 10 demo sessions for DBMS
-    for (let i = 1; i <= 10; i++) {
-      const sessionDate = new Date();
-      sessionDate.setDate(sessionDate.getDate() - (10 - i));
+    const existingSessions = await prisma.attendanceSession.findMany({
+      where: {
+        subjectId: dbmsSubject.id,
+        teacherId: teacherUser.teacher.id,
+        batchId: batch.id,
+      },
+      orderBy: { sessionDate: 'asc' },
+    });
 
-      const session = await prisma.attendanceSession.create({
-        data: {
-          subjectId: dbmsSubject.id,
-          teacherId: teacherUser.teacher.id,
-          batchId: batch.id,
-          sessionDate,
-          startTime: sessionDate,
-          endTime: new Date(sessionDate.getTime() + 3600000),
-        },
-      });
+    if (existingSessions.length === 0) {
+      // Create 10 demo sessions for DBMS
+      for (let i = 1; i <= 10; i++) {
+        const sessionDate = new Date();
+        sessionDate.setDate(sessionDate.getDate() - (10 - i));
 
-      // Student 1 (Jane Doe): Attends 9 out of 10 sessions (90%)
-      await prisma.attendance.create({
-        data: {
-          sessionId: session.id,
-          studentId: student1User.student.id,
-          status: i === 5 ? 'ABSENT' : 'PRESENT',
-          markedAt: sessionDate,
-        },
-      });
+        const session = await prisma.attendanceSession.create({
+          data: {
+            subjectId: dbmsSubject.id,
+            teacherId: teacherUser.teacher.id,
+            batchId: batch.id,
+            sessionDate,
+            startTime: sessionDate,
+            endTime: new Date(sessionDate.getTime() + 3600000),
+          },
+        });
 
-      // Student 2 (Rahul Patwal): Attends 6 out of 10 sessions (60% - Low Attendance)
-      await prisma.attendance.create({
-        data: {
-          sessionId: session.id,
-          studentId: student2User.student.id,
-          status: i <= 6 ? 'PRESENT' : 'ABSENT',
-          markedAt: sessionDate,
-        },
-      });
+        // Student 1 (Jane Doe): Attends 9 out of 10 sessions (90%)
+        await prisma.attendance.upsert({
+          where: {
+            sessionId_studentId: {
+              sessionId: session.id,
+              studentId: student1User.student.id,
+            },
+          },
+          update: { status: i === 5 ? 'ABSENT' : 'PRESENT', markedAt: sessionDate },
+          create: {
+            sessionId: session.id,
+            studentId: student1User.student.id,
+            status: i === 5 ? 'ABSENT' : 'PRESENT',
+            markedAt: sessionDate,
+          },
+        });
+
+        // Student 2 (Rahul Patwal): Attends 6 out of 10 sessions (60% - Low Attendance)
+        await prisma.attendance.upsert({
+          where: {
+            sessionId_studentId: {
+              sessionId: session.id,
+              studentId: student2User.student.id,
+            },
+          },
+          update: { status: i <= 6 ? 'PRESENT' : 'ABSENT', markedAt: sessionDate },
+          create: {
+            sessionId: session.id,
+            studentId: student2User.student.id,
+            status: i <= 6 ? 'PRESENT' : 'ABSENT',
+            markedAt: sessionDate,
+          },
+        });
+      }
+      console.log('✅ Generated 10 demo attendance sessions with realistic attendance math records (Jane Doe: 90%, Rahul Patwal: 60%)');
+    } else {
+      // Ensure student 1 and student 2 have synced attendance records across existing sessions
+      for (let i = 0; i < existingSessions.length; i++) {
+        const session = existingSessions[i];
+        await prisma.attendance.upsert({
+          where: {
+            sessionId_studentId: {
+              sessionId: session.id,
+              studentId: student1User.student.id,
+            },
+          },
+          update: { status: i === 4 ? 'ABSENT' : 'PRESENT' },
+          create: {
+            sessionId: session.id,
+            studentId: student1User.student.id,
+            status: i === 4 ? 'ABSENT' : 'PRESENT',
+            markedAt: session.sessionDate,
+          },
+        });
+
+        await prisma.attendance.upsert({
+          where: {
+            sessionId_studentId: {
+              sessionId: session.id,
+              studentId: student2User.student.id,
+            },
+          },
+          update: { status: i < 6 ? 'PRESENT' : 'ABSENT' },
+          create: {
+            sessionId: session.id,
+            studentId: student2User.student.id,
+            status: i < 6 ? 'PRESENT' : 'ABSENT',
+            markedAt: session.sessionDate,
+          },
+        });
+      }
+      console.log(`✅ Synced attendance records for Jane Doe & Rahul Patwal across ${existingSessions.length} existing demo sessions.`);
     }
-    console.log('✅ Generated 10 demo attendance sessions with realistic attendance math records (Jane Doe: 90%, Rahul Patwal: 60%)');
   }
 
   console.log('\n🎉 Database seeding finished successfully with demo accounts & academic data!');
